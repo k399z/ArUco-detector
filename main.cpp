@@ -135,9 +135,40 @@ int main() {
     cap.set(cv::CAP_PROP_FRAME_WIDTH, kFrameWidth);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, kFrameHeight);
 
-    // 使用 OpenCV 自带的 ArUco 字典
-    cv::Ptr<cv::aruco::Dictionary> dictionary =
-        cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
+    // Prepare a list of all ArUco dictionaries we want to detect
+    struct DictInfo { const char* name; cv::aruco::PREDEFINED_DICTIONARY_NAME id; };
+    static const std::vector<DictInfo> kDicts = {
+        {"4X4_50",        cv::aruco::DICT_4X4_50},
+        {"4X4_100",       cv::aruco::DICT_4X4_100},
+        {"4X4_250",       cv::aruco::DICT_4X4_250},
+        {"4X4_1000",      cv::aruco::DICT_4X4_1000},
+        {"5X5_50",        cv::aruco::DICT_5X5_50},
+        {"5X5_100",       cv::aruco::DICT_5X5_100},
+        {"5X5_250",       cv::aruco::DICT_5X5_250},
+        {"5X5_1000",      cv::aruco::DICT_5X5_1000},
+        {"6X6_50",        cv::aruco::DICT_6X6_50},
+        {"6X6_100",       cv::aruco::DICT_6X6_100},
+        {"6X6_250",       cv::aruco::DICT_6X6_250},
+        {"6X6_1000",      cv::aruco::DICT_6X6_1000},
+        {"7X7_50",        cv::aruco::DICT_7X7_50},
+        {"7X7_100",       cv::aruco::DICT_7X7_100},
+        {"7X7_250",       cv::aruco::DICT_7X7_250},
+        {"7X7_1000",      cv::aruco::DICT_7X7_1000},
+        {"ARUCO_ORIGINAL",cv::aruco::DICT_ARUCO_ORIGINAL},
+    };
+    std::vector<cv::Ptr<cv::aruco::Dictionary>> dictionaries;
+    dictionaries.reserve(kDicts.size());
+    for (const auto& d : kDicts) {
+        dictionaries.emplace_back(cv::aruco::getPredefinedDictionary(d.id));
+    }
+    // Tune detection parameters slightly for better recall on small markers
+    cv::Ptr<cv::aruco::DetectorParameters> detParams = cv::aruco::DetectorParameters::create();
+    detParams->adaptiveThreshWinSizeMin = 3;
+    detParams->adaptiveThreshWinSizeMax = 23;
+    detParams->adaptiveThreshWinSizeStep = 10;
+    detParams->minMarkerPerimeterRate = 0.03f; // detect smaller markers
+    detParams->maxMarkerPerimeterRate = 4.0f;
+    detParams->polygonalApproxAccuracyRate = 0.03;
 
     Mat frame;
 
@@ -156,22 +187,42 @@ int main() {
 
         if (!cap.read(frame) || frame.empty()) break;
 
-        std::vector<int> ids;
-        std::vector<std::vector<cv::Point2f>> corners;
+        // Accumulate detections from all dictionaries
+        std::vector<int> allIds; allIds.reserve(64);
+        std::vector<std::vector<cv::Point2f>> allCorners; allCorners.reserve(64);
+        std::vector<std::string> labels; labels.reserve(64);
 
-        // 检测 ArUco marker
-        cv::aruco::detectMarkers(frame, dictionary, corners, ids);
-
-        // 如果检测到 marker 就画出来
-        if (!ids.empty()) {
-            cv::aruco::drawDetectedMarkers(frame, corners, ids);
-            // for (int id : ids) std::cout << "检测到 ID: " << id << std::endl;
+        for (size_t i = 0; i < dictionaries.size(); ++i) {
+            std::vector<int> ids;
+            std::vector<std::vector<cv::Point2f>> corners;
+            cv::aruco::detectMarkers(frame, dictionaries[i], corners, ids, detParams);
+            if (!ids.empty()) {
+                // Append and create human-readable labels including dictionary
+                for (size_t k = 0; k < ids.size(); ++k) {
+                    allCorners.push_back(corners[k]);
+                    allIds.push_back(ids[k]);
+                    labels.emplace_back(std::string(kDicts[i].name) + ":" + std::to_string(ids[k]));
+                }
+            }
         }
 
-        // Overlay averaged duration and FPS
+        // Draw all detected markers
+        if (!allIds.empty()) {
+            cv::aruco::drawDetectedMarkers(frame, allCorners, allIds);
+            // Put dictionary label near each marker center
+            for (size_t i = 0; i < allCorners.size(); ++i) {
+                const auto& pts = allCorners[i];
+                cv::Point2f c(0,0);
+                for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
+                cv::putText(frame, labels[i], c + cv::Point2f(-20, -10),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,255), 2, cv::LINE_AA);
+            }
+        }
+
+        // Overlay averaged duration, FPS, and detection count
         double dur = nowMs() - start; // ms
-        std::string statsText = cv::format("avg %.2f ms  fps %.1f",
-                                           stats.updateAvgMs(dur), stats.tickFps());
+        std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d",
+                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size());
         cv::putText(frame, statsText, cv::Point(10, 30),
                     cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,255,0), 2);
 
