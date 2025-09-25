@@ -164,13 +164,28 @@ int main() {
     // Tune detection parameters slightly for better recall on small markers
     cv::Ptr<cv::aruco::DetectorParameters> detParams = cv::aruco::DetectorParameters::create();
     detParams->adaptiveThreshWinSizeMin = 3;
-    detParams->adaptiveThreshWinSizeMax = 23;
+    detParams->adaptiveThreshWinSizeMax = 23; // keep small for speed
     detParams->adaptiveThreshWinSizeStep = 10;
     detParams->minMarkerPerimeterRate = 0.03f; // detect smaller markers
     detParams->maxMarkerPerimeterRate = 4.0f;
     detParams->polygonalApproxAccuracyRate = 0.03;
+    detParams->cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE; // faster
+
+    // Runtime tunables for FPS on low-power devices
+    double detectScale = 0.5;     // downscale for detection (0.33..1.0)
+    int detectEveryN = 1;         // detect every N frames (1=no skip)
+    bool useAllDicts = false;     // toggle to scan all dictionaries
+    // A practical fast subset: 6x6_250 and ARUCO_ORIGINAL
+    std::vector<int> subsetIdx = {10, 16}; // indices in kDicts
 
     Mat frame;
+    Mat gray, detectImg;
+
+    // Cache last detections when using stride >1
+    std::vector<int> lastIds;
+    std::vector<std::vector<cv::Point2f>> lastCorners;
+    std::vector<std::string> lastLabels;
+    int frameIndex = 0;
 
     // Enable terminal key handling with RAII
     TerminalRawGuard terminalGuard;
@@ -187,23 +202,48 @@ int main() {
 
         if (!cap.read(frame) || frame.empty()) break;
 
+        // Prepare grayscale and optionally downscaled image for faster detection
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        if (detectScale < 0.999) {
+            cv::resize(gray, detectImg, Size(), detectScale, detectScale, cv::INTER_AREA);
+        } else {
+            detectImg = gray;
+        }
+
         // Accumulate detections from all dictionaries
         std::vector<int> allIds; allIds.reserve(64);
         std::vector<std::vector<cv::Point2f>> allCorners; allCorners.reserve(64);
         std::vector<std::string> labels; labels.reserve(64);
 
-        for (size_t i = 0; i < dictionaries.size(); ++i) {
-            std::vector<int> ids;
-            std::vector<std::vector<cv::Point2f>> corners;
-            cv::aruco::detectMarkers(frame, dictionaries[i], corners, ids, detParams);
-            if (!ids.empty()) {
-                // Append and create human-readable labels including dictionary
-                for (size_t k = 0; k < ids.size(); ++k) {
-                    allCorners.push_back(corners[k]);
-                    allIds.push_back(ids[k]);
-                    labels.emplace_back(std::string(kDicts[i].name) + ":" + std::to_string(ids[k]));
+        bool doDetect = ((frameIndex % detectEveryN) == 0);
+        if (doDetect) {
+            auto detectInDict = [&](size_t i){
+                std::vector<int> ids;
+                std::vector<std::vector<cv::Point2f>> corners;
+                cv::aruco::detectMarkers(detectImg, dictionaries[i], corners, ids, detParams);
+                if (!ids.empty()) {
+                    double inv = detectScale < 0.999 ? (1.0/detectScale) : 1.0;
+                    for (size_t k = 0; k < ids.size(); ++k) {
+                        if (detectScale < 0.999) {
+                            for (auto& p : corners[k]) { p.x = float(p.x * inv); p.y = float(p.y * inv); }
+                        }
+                        allCorners.push_back(corners[k]);
+                        allIds.push_back(ids[k]);
+                        labels.emplace_back(std::string(kDicts[i].name) + ":" + std::to_string(ids[k]));
+                    }
                 }
+            };
+
+            if (useAllDicts) {
+                for (size_t i = 0; i < dictionaries.size(); ++i) detectInDict(i);
+            } else {
+                for (int idx : subsetIdx) if (idx >=0 && idx < (int)dictionaries.size()) detectInDict((size_t)idx);
             }
+
+            // Store for skipped frames
+            lastIds = allIds; lastCorners = allCorners; lastLabels = labels;
+        } else {
+            allIds = lastIds; allCorners = lastCorners; labels = lastLabels;
         }
 
         // Draw all detected markers
@@ -219,10 +259,11 @@ int main() {
             }
         }
 
-        // Overlay averaged duration, FPS, and detection count
+        // Overlay averaged duration, FPS, and detection count (+ mode info)
         double dur = nowMs() - start; // ms
-        std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d",
-                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size());
+        std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d  mode %s  scale %.2f  stride %d",
+                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size(),
+                                           useAllDicts ? "ALL" : "FAST", detectScale, detectEveryN);
         cv::putText(frame, statsText, cv::Point(10, 30),
                     cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,255,0), 2);
 
@@ -230,7 +271,22 @@ int main() {
 
         // Unified exit handling
         int key = cv::waitKey(1);
+        // Simple hotkeys for performance tuning
+        if (key >= 0) {
+            int k = key & 0xFF;
+            if (k == 'a' || k == 'A') useAllDicts = !useAllDicts;
+            if (k == '1') detectEveryN = 1;
+            if (k == '2') detectEveryN = 2;
+            if (k == '3') detectEveryN = 3;
+            if (k == '4') detectEveryN = 4;
+            if (k == 'z' || k == 'Z') {
+                // cycle common scales: 1.0 -> 0.75 -> 0.5 -> 0.33 -> 1.0
+                const double scales[] = {1.0, 0.75, 0.5, 0.33};
+                for (int i=0;i<4;i++) if (fabs(detectScale - scales[i]) < 1e-3) { detectScale = scales[(i+1)%4]; break; }
+            }
+        }
         if (exitRequested(key)) break;
+        ++frameIndex;
     }
 
     // Terminal restored automatically by TerminalRawGuard

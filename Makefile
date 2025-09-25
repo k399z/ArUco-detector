@@ -1,5 +1,6 @@
  CXX ?= g++
- CXXFLAGS ?= -O2 -std=c++11
+ # For Raspberry Pi: increase optimization and enable fast math; keep portable defaults
+ CXXFLAGS ?= -O3 -ffast-math -funsafe-math-optimizations -DNDEBUG -std=c++11
  PKG_CONFIG_FLAGS := $(shell pkg-config --cflags --libs opencv4)
 
  OUT_MAIN := apriltag_demo
