@@ -135,35 +135,7 @@ int main() {
     cap.set(cv::CAP_PROP_FRAME_WIDTH, kFrameWidth);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, kFrameHeight);
 
-    // Prepare a list of all ArUco dictionaries we want to detect
-    struct DictInfo { const char* name; cv::aruco::PREDEFINED_DICTIONARY_NAME id; };
-    static const std::vector<DictInfo> kDicts = {
-        {"4X4_50",        cv::aruco::DICT_4X4_50},
-        {"4X4_100",       cv::aruco::DICT_4X4_100},
-        {"4X4_250",       cv::aruco::DICT_4X4_250},
-        {"4X4_1000",      cv::aruco::DICT_4X4_1000},
-        {"5X5_50",        cv::aruco::DICT_5X5_50},
-        {"5X5_100",       cv::aruco::DICT_5X5_100},
-        {"5X5_250",       cv::aruco::DICT_5X5_250},
-        {"5X5_1000",      cv::aruco::DICT_5X5_1000},
-        {"6X6_50",        cv::aruco::DICT_6X6_50},
-        {"6X6_100",       cv::aruco::DICT_6X6_100},
-        {"6X6_250",       cv::aruco::DICT_6X6_250},
-        {"6X6_1000",      cv::aruco::DICT_6X6_1000},
-        {"7X7_50",        cv::aruco::DICT_7X7_50},
-        {"7X7_100",       cv::aruco::DICT_7X7_100},
-        {"7X7_250",       cv::aruco::DICT_7X7_250},
-        {"7X7_1000",      cv::aruco::DICT_7X7_1000},
-        {"ARUCO_ORIGINAL",cv::aruco::DICT_ARUCO_ORIGINAL},
-    };
-    std::vector<cv::Ptr<cv::aruco::Dictionary>> dictionaries;
-    dictionaries.reserve(kDicts.size());
-    for (const auto& d : kDicts) {
-        dictionaries.emplace_back(cv::aruco::getPredefinedDictionary(d.id));
-    }
-
-    // Toggle: only detect 6x6_50 when true
-    bool onlyDetect6x6_50 = false;
+    // Use only DICT_6X6_50
     auto dict6x6_50 = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
     const char* dict6x6_50_name = "6X6_50";
 
@@ -193,35 +165,19 @@ int main() {
 
         if (!cap.read(frame) || frame.empty()) break;
 
-        // Accumulate detections from all dictionaries
+        // Accumulate detections (6x6_50 only)
         std::vector<int> allIds; allIds.reserve(64);
         std::vector<std::vector<cv::Point2f>> allCorners; allCorners.reserve(64);
         std::vector<std::string> labels; labels.reserve(64);
 
-        if (onlyDetect6x6_50) {
-            std::vector<int> ids;
-            std::vector<std::vector<cv::Point2f>> corners;
-            cv::aruco::detectMarkers(frame, dict6x6_50, corners, ids, detParams);
-            if (!ids.empty()) {
-                for (size_t k = 0; k < ids.size(); ++k) {
-                    allCorners.push_back(corners[k]);
-                    allIds.push_back(ids[k]);
-                    labels.emplace_back(std::string(dict6x6_50_name) + ":" + std::to_string(ids[k]));
-                }
-            }
-        } else {
-            for (size_t i = 0; i < dictionaries.size(); ++i) {
-                std::vector<int> ids;
-                std::vector<std::vector<cv::Point2f>> corners;
-                cv::aruco::detectMarkers(frame, dictionaries[i], corners, ids, detParams);
-                if (!ids.empty()) {
-                    // Append and create human-readable labels including dictionary
-                    for (size_t k = 0; k < ids.size(); ++k) {
-                        allCorners.push_back(corners[k]);
-                        allIds.push_back(ids[k]);
-                        labels.emplace_back(std::string(kDicts[i].name) + ":" + std::to_string(ids[k]));
-                    }
-                }
+        std::vector<int> ids;
+        std::vector<std::vector<cv::Point2f>> corners;
+        cv::aruco::detectMarkers(frame, dict6x6_50, corners, ids, detParams);
+        if (!ids.empty()) {
+            for (size_t k = 0; k < ids.size(); ++k) {
+                allCorners.push_back(corners[k]);
+                allIds.push_back(ids[k]);
+                labels.emplace_back(std::string(dict6x6_50_name) + ":" + std::to_string(ids[k]));
             }
         }
 
@@ -238,21 +194,17 @@ int main() {
             }
         }
 
-        // Overlay averaged duration, FPS, detection count, and mode
+        // Overlay averaged duration, FPS, and detection count
         double dur = nowMs() - start; // ms
-        std::string mode = onlyDetect6x6_50 ? "6x6_50" : "ALL";
-        std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d  mode %s",
-                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size(), mode.c_str());
+        std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d",
+                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size());
         cv::putText(frame, statsText, cv::Point(10, 30),
                     cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,255,0), 2);
 
         cv::imshow(kWindowTitle, frame);
 
-        // Unified exit handling + toggle
+        // Unified exit handling
         int key = cv::waitKey(1);
-        if (key == 't' || key == 'T' || key == '6') {
-            onlyDetect6x6_50 = !onlyDetect6x6_50;
-        }
         if (exitRequested(key)) break;
     }
 
@@ -261,4 +213,3 @@ int main() {
     cv::destroyAllWindows();
     return 0;
 }
-
