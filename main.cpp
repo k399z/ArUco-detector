@@ -2,6 +2,7 @@
 #include <opencv2/aruco.hpp>
 #include <iostream>
 #include <chrono>
+#include <unordered_map>
 #if defined(__unix__) || defined(__APPLE__)
 #include <termios.h>
 #include <unistd.h>
@@ -170,14 +171,23 @@ int main() {
         std::vector<std::vector<cv::Point2f>> allCorners; allCorners.reserve(64);
         std::vector<std::string> labels; labels.reserve(64);
 
+        // Only allow IDs 3 and 7 with special names
+        static const std::unordered_map<int, std::string> kSpecialNames = {
+            {3, "Marker_Three"},
+            {7, "Marker_Seven"}
+        };
+
         std::vector<int> ids;
         std::vector<std::vector<cv::Point2f>> corners;
         cv::aruco::detectMarkers(frame, dict6x6_50, corners, ids, detParams);
         if (!ids.empty()) {
             for (size_t k = 0; k < ids.size(); ++k) {
+                auto it = kSpecialNames.find(ids[k]);
+                if (it == kSpecialNames.end())
+                    continue; // ignore every other id
                 allCorners.push_back(corners[k]);
                 allIds.push_back(ids[k]);
-                labels.emplace_back(std::string(dict6x6_50_name) + ":" + std::to_string(ids[k]));
+                labels.emplace_back(it->second);
             }
         }
 
