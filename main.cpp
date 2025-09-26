@@ -193,7 +193,7 @@ int main() {
                 cv::Point2f c(0,0);
                 for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
                 cv::putText(frame, labels[i], c + cv::Point2f(-20, -10),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,255), 2, cv::LINE_AA);
+                            cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(153, 0, 255), 1.5, cv::LINE_AA);
             }
         }
 
