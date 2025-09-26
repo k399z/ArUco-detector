@@ -111,22 +111,84 @@ static inline bool exitRequested(int windowKey) {
     return false;
 }
 
-int main() {
+// Small helpers to open sources
+static bool tryOpenCamera(int index, cv::VideoCapture& cap, int w, int h) {
+    cap.release();
+    if (!cap.open(index)) return false;
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, w);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, h);
+    return cap.isOpened();
+}
+
+static void listCameras(int maxIndexToProbe = 10) {
+    std::cout << "Probing V4L2 cameras...\n";
+    for (int i = 0; i < maxIndexToProbe; ++i) {
+        cv::VideoCapture test;
+        if (test.open(i)) {
+            double w = test.get(cv::CAP_PROP_FRAME_WIDTH);
+            double h = test.get(cv::CAP_PROP_FRAME_HEIGHT);
+            std::cout << " - /dev/video" << i << " (opened)";
+            if (w > 0 && h > 0) std::cout << " default " << (int)w << "x" << (int)h;
+            std::cout << "\n";
+            test.release();
+        }
+    }
+}
+
+int main(int argc, char** argv) {
     // Constants for clarity
     const int kFrameWidth = 640;
     const int kFrameHeight = 480;
     const char* kWindowTitle = "Aruco Detect";
 
-    // 打开摄像头
-    cv::VideoCapture cap(0);
-    if (!cap.isOpened()) {
-        std::cerr << "无法打开摄像头" << std::endl;
-        return -1;
+    // Parse optional input source
+    // Usage now: ./aruco_demo [--list] [0|1]
+    if (argc >= 2 && std::string(argv[1]) == "--list") {
+        listCameras(2); // only probe 0 and 1
+        return 0;
     }
 
-    // 设置分辨率 640x480
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, kFrameWidth);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, kFrameHeight);
+    int requestedIndex = -1;
+    if (argc >= 2) {
+        std::string arg = argv[1];
+        bool numeric = !arg.empty() &&
+                       std::all_of(arg.begin(), arg.end(), [](unsigned char c){ return std::isdigit(c); });
+        if (!numeric) {
+            std::cerr << "仅支持摄像头索引 0 或 1 (不支持图片/视频路径)." << std::endl;
+            return 2;
+        }
+        requestedIndex = std::stoi(arg);
+        if (requestedIndex < 0 || requestedIndex > 1) {
+            std::cerr << "无效的摄像头索引 " << requestedIndex
+                      << ". 仅支持 0 或 1." << std::endl;
+            return 2;
+        }
+    }
+
+    cv::VideoCapture cap;
+
+    if (requestedIndex >= 0) {
+        if (!tryOpenCamera(requestedIndex, cap, 640, 480)) {
+            std::cerr << "无法打开摄像头索引 " << requestedIndex
+                      << " (仅支持 0 或 1)." << std::endl;
+            return 3;
+        }
+    } else {
+        // No argument: try 0 then 1 only
+        int indices[2] = {0,1};
+        bool opened = false;
+        for (int idx : indices) {
+            if (tryOpenCamera(idx, cap, 640, 480)) { opened = true; break; }
+        }
+        if (!opened) {
+            std::cerr << "无法打开摄像头 (仅尝试 /dev/video0 与 /dev/video1).\n"
+                      << "提示:\n"
+                      << "  1) 运行: ./aruco_demo --list 查看可用设备 (仅列出 0,1)\n"
+                      << "  2) 指定: ./aruco_demo 0  或  ./aruco_demo 1\n"
+                      << "  3) 现在已不支持文件/图片/URL 输入\n";
+            return 1;
+        }
+    }
 
     // Use only DICT_6X6_50
     auto dict6x6_50 = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
@@ -152,61 +214,107 @@ int main() {
     signal(SIGHUP, handleSignal);
 
     FpsStats stats;
-
+    
     while (true) {
         double start = nowMs(); // start timing this frame
 
         if (!cap.read(frame) || frame.empty()) break;
 
-        // Accumulate detections (6x6_50 only)
-        std::vector<int> allIds; allIds.reserve(64);
-        std::vector<std::vector<cv::Point2f>> allCorners; allCorners.reserve(64);
-        std::vector<std::string> labels; labels.reserve(64);
-
         // Only allow IDs 3 and 7 with special names
         static const std::unordered_map<int, std::string> kSpecialNames = {
-            {3, "Marker_Three"},
-            {7, "Marker_Seven"}
+            {3, "Three's Company"},
+            {7, "Lucky Number Seven"}
         };
+
+        // NEW: correct (allowed) ID containers (replaces former allIds/allCorners/labels)
+        std::vector<int> correctIds; correctIds.reserve(64);
+        std::vector<std::vector<cv::Point2f>> correctCorners; correctCorners.reserve(64);
+        std::vector<std::string> correctLabels; correctLabels.reserve(64);
+
+        // Existing: wrong (disallowed) IDs
+        std::vector<int> wrongIds; wrongIds.reserve(64);
+        std::vector<std::vector<cv::Point2f>> wrongCorners; wrongCorners.reserve(64) ;
+        std::vector<std::string> wrongLabels; wrongLabels.reserve(64);
+
+        std::vector<std::vector<cv::Point2f>> rejectedCorners; rejectedCorners.reserve(64);
 
         std::vector<int> ids;
         std::vector<std::vector<cv::Point2f>> corners;
-        cv::aruco::detectMarkers(frame, dict6x6_50, corners, ids, detParams);
+        cv::aruco::detectMarkers(frame, dict6x6_50, corners, ids, detParams, rejectedCorners);
         if (!ids.empty()) {
             for (size_t k = 0; k < ids.size(); ++k) {
                 auto it = kSpecialNames.find(ids[k]);
-                if (it == kSpecialNames.end())
-                    continue; // ignore every other id
-                allCorners.push_back(corners[k]);
-                allIds.push_back(ids[k]);
-                labels.emplace_back(it->second);
+                if (it == kSpecialNames.end()) {
+                    wrongCorners.push_back(corners[k]);
+                    wrongIds.push_back(ids[k]);
+                    wrongLabels.emplace_back(cv::format("Wrong_ID_%d", ids[k]));
+                } else {
+                    correctCorners.push_back(corners[k]);
+                    correctIds.push_back(ids[k]);
+                    correctLabels.emplace_back(it->second);
+                }
             }
         }
 
-        // Draw all detected markers
-        if (!allIds.empty()) {
-            // Neon green: BGR(57, 255, 20)
-            cv::aruco::drawDetectedMarkers(frame, allCorners, allIds, cv::Scalar(57, 255, 20));
-            // Put dictionary label near each marker center
-            for (size_t i = 0; i < allCorners.size(); ++i) {
-                const auto& pts = allCorners[i];
+        // Draw correct (allowed) markers
+        if (!correctIds.empty()) {
+            cv::aruco::drawDetectedMarkers(frame, correctCorners, correctIds, cv::Scalar(153, 0, 255));
+            // Draw thicker borders
+            for (const auto& pts : correctCorners) {
+                std::vector<cv::Point> poly;
+                for (const auto& p : pts) poly.push_back(p);
+                const cv::Point* ptsArr = poly.data();
+                int npts = poly.size();
+                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(153, 0, 255), 6, cv::LINE_AA);
+            }
+            for (size_t i = 0; i < correctCorners.size(); ++i) {
+                const auto& pts = correctCorners[i];
                 cv::Point2f c(0,0);
                 for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
-                cv::putText(frame, labels[i], c + cv::Point2f(-20, -10),
+                cv::putText(frame, correctLabels[i], c + cv::Point2f(-20, -10),
                             cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(153, 0, 255), 1.5, cv::LINE_AA);
             }
         }
 
-        // Overlay averaged duration, FPS, and detection count
-        double dur = nowMs() - start; // ms
+        // Draw wrong IDs
+        if (!wrongIds.empty()) {
+            cv::aruco::drawDetectedMarkers(frame, wrongCorners, wrongIds, cv::Scalar(0, 0, 255));
+            // Draw thicker borders
+            for (const auto& pts : wrongCorners) {
+                std::vector<cv::Point> poly;
+                for (const auto& p : pts) poly.push_back(p);
+                const cv::Point* ptsArr = poly.data();
+                int npts = poly.size();
+                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(0, 0, 255), 6, cv::LINE_AA);
+            }
+            for (size_t i = 0; i < wrongCorners.size(); ++i) {
+                const auto& pts = wrongCorners[i];
+                cv::Point2f c(0,0);
+                for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
+                cv::putText(frame, wrongLabels[i], c + cv::Point2f(-20, -10),
+                            cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+            }
+        }
+        
+        // Draw rejected candidate quadrilaterals (failed final ID / criteria)
+        if (!rejectedCorners.empty()) {
+            cv::aruco::drawDetectedMarkers(frame, rejectedCorners, cv::noArray(), cv::Scalar(60, 60, 255));
+            // Draw thicker borders
+            for (const auto& pts : rejectedCorners) {
+                std::vector<cv::Point> poly;
+                for (const auto& p : pts) poly.push_back(p);
+                const cv::Point* ptsArr = poly.data();
+                int npts = poly.size();
+                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(60, 60, 255), 1, cv::LINE_AA);
+            }
+        }
+        double dur = nowMs() - start;
         std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d",
-                                           stats.updateAvgMs(dur), stats.tickFps(), (int)labels.size());
+                                           stats.updateAvgMs(dur), stats.tickFps(), (int)correctLabels.size());
         cv::putText(frame, statsText, cv::Point(10, 30),
                     cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,255,0), 2);
 
         cv::imshow(kWindowTitle, frame);
-
-        // Unified exit handling
         int key = cv::waitKey(1);
         if (exitRequested(key)) break;
     }
