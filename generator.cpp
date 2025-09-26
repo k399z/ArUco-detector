@@ -63,7 +63,8 @@ static Mat renderMarker(const State& s) {
     aruco::drawMarker(dict, id, ms, img, bb);
 
     // Place the marker on a white background with padding so it doesn't touch edges.
-    int margin = std::max(10, ms / 10); // smaller white margin
+    // Increased padding to make the white background larger.
+    int margin = std::max(30, ms / 5);
     Mat bg(img.rows + 2*margin, img.cols + 2*margin, CV_8UC1, Scalar(255));
     img.copyTo(bg(Rect(margin, margin, img.cols, img.rows)));
     return bg;
@@ -163,19 +164,23 @@ int main(int argc, char** argv) {
     int key = waitKeyEx(0); // extended keys (arrows, etc.)
     if (key < 0) continue;
 
+    // Interpret ASCII only for plain keys (<= 255). Do NOT mask extended codes,
+    // otherwise arrows like Left (0xFF51) would become 'Q' and trigger quit.
+    const bool isCharKey = (key >= 0 && key <= 255);
+    const int ch = isCharKey ? key : -1;
+
     // Quit (ASCII)
-    int keyAscii = key & 0xFF;
-    if (keyAscii == 27 || keyAscii == 'q' || keyAscii == 'Q') break;
+    if (ch == 27 || ch == 'q' || ch == 'Q') break;
 
         // Toggle help
-    if (keyAscii == 'h' || keyAscii == 'H') { s.showHelp = !s.showHelp; needRedraw = true; continue; }
+    if (ch == 'h' || ch == 'H') { s.showHelp = !s.showHelp; needRedraw = true; continue; }
 
         // Dictionary cycle: 'd' previous, 'D' next
-    if (keyAscii == 'd') { s.dictIdx = (s.dictIdx - 1 + (int)kDicts.size()) % (int)kDicts.size();
+    if (ch == 'd') { s.dictIdx = (s.dictIdx - 1 + (int)kDicts.size()) % (int)kDicts.size();
                           // clamp id to available range
                           s.markerId = std::min(s.markerId, currentDictSize(s) - 1);
                           needRedraw = true; continue; }
-    if (keyAscii == 'D') { s.dictIdx = (s.dictIdx + 1) % (int)kDicts.size();
+    if (ch == 'D') { s.dictIdx = (s.dictIdx + 1) % (int)kDicts.size();
                           s.markerId = std::min(s.markerId, currentDictSize(s) - 1);
                           needRedraw = true; continue; }
 
@@ -188,12 +193,12 @@ int main(int argc, char** argv) {
         const int KEY_DOWN_1 = 65364, KEY_DOWN_2 = 2621440;
 
         // ID adjust: Left/Right arrows or ',' '.' keys
-    if (key == KEY_LEFT_1 || key == KEY_LEFT_2 || keyAscii == ',' ) {
+    if (key == KEY_LEFT_1 || key == KEY_LEFT_2 || ch == ',' ) {
             s.markerId = (s.markerId - 1);
             if (s.markerId < 0) s.markerId = currentDictSize(s) - 1;
             needRedraw = true; continue;
         }
-    if (key == KEY_RIGHT_1 || key == KEY_RIGHT_2 || keyAscii == '.' ) {
+    if (key == KEY_RIGHT_1 || key == KEY_RIGHT_2 || ch == '.' ) {
             s.markerId = (s.markerId + 1) % std::max(1, currentDictSize(s));
             needRedraw = true; continue;
         }
@@ -203,18 +208,18 @@ int main(int argc, char** argv) {
         if (key == KEY_DOWN_1 || key == KEY_DOWN_2) { s.markerSize = std::max(50, s.markerSize - 50); needRedraw = true; continue; }
 
         // Border bits adjust: '[' ']' keys
-    if (keyAscii == '[') { s.borderBits = std::max(0, s.borderBits - 1); needRedraw = true; continue; }
-    if (keyAscii == ']') { s.borderBits = std::min(7, s.borderBits + 1); needRedraw = true; continue; }
+    if (ch == '[') { s.borderBits = std::max(0, s.borderBits - 1); needRedraw = true; continue; }
+    if (ch == ']') { s.borderBits = std::min(7, s.borderBits + 1); needRedraw = true; continue; }
 
         // Random ID
-    if (keyAscii == 'r' || keyAscii == 'R') {
+    if (ch == 'r' || ch == 'R') {
             int maxId = std::max(1, currentDictSize(s));
             s.markerId = rand() % maxId;
             needRedraw = true; continue;
         }
 
         // Save PNG
-    if (keyAscii == 's' || keyAscii == 'S') {
+    if (ch == 's' || ch == 'S') {
             Mat img = renderMarker(s);
             std::string path = s.defaultOut.empty() ? autoFileName(s) : s.defaultOut;
             try {

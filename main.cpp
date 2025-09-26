@@ -3,11 +3,9 @@
 #include <iostream>
 #include <chrono>
 #include <unordered_map>
-#if defined(__unix__) || defined(__APPLE__)
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
-#endif
 #include <signal.h> // signals for clean exit
 
 using namespace std;
@@ -45,7 +43,6 @@ struct FpsStats {
 // ---- End timing helpers ----
 
 // ---- Terminal (Unix) non-blocking input helpers ----
-#if defined(__unix__) || defined(__APPLE__)
 static struct termios orig_termios;
 static bool term_raw_enabled = false;
 
@@ -73,11 +70,6 @@ bool stdinKeyPressed(int& ch) {
     if (n == 1) { ch = c; return true; }
     return false;
 }
-#else
-void enableRawTerminal() {}
-void disableRawTerminal() {}
-bool stdinKeyPressed(int&) { return false; }
-#endif
 // ---- End terminal helpers ----
 
 // Ensure raw terminal is restored automatically
@@ -89,7 +81,9 @@ struct TerminalRawGuard {
 // Add exit key matcher and signal handling
 static inline bool isExitKey(int k) {
     if (k < 0) return false;
-    k &= 0xFF; // normalize
+    // Only consider ASCII range for exit keys; do NOT mask extended codes
+    // to 8-bit, otherwise arrow keys (e.g., 0xFF51) would appear as 'Q'.
+    if (k > 255) return false;
     switch (k) {
         case 27:            // ESC
         case 'q': case 'Q': // quit
@@ -111,10 +105,8 @@ void handleSignal(int) { g_signal_exit = 1; }
 // Centralized exit request check (window key, terminal key, or signal)
 static inline bool exitRequested(int windowKey) {
     if (isExitKey(windowKey)) return true;
-#if defined(__unix__) || defined(__APPLE__)
     int ch;
     if (stdinKeyPressed(ch) && isExitKey(ch)) return true;
-#endif
     if (g_signal_exit) return true;
     return false;
 }
@@ -193,7 +185,8 @@ int main() {
 
         // Draw all detected markers
         if (!allIds.empty()) {
-            cv::aruco::drawDetectedMarkers(frame, allCorners, allIds);
+            // Neon green: BGR(57, 255, 20)
+            cv::aruco::drawDetectedMarkers(frame, allCorners, allIds, cv::Scalar(57, 255, 20));
             // Put dictionary label near each marker center
             for (size_t i = 0; i < allCorners.size(); ++i) {
                 const auto& pts = allCorners[i];
