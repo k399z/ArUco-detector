@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
             {3, "Three's Company"},
             {7, "Lucky Number Seven"}
         };
-
+        
         // NEW: correct (allowed) ID containers (replaces former allIds/allCorners/labels)
         std::vector<int> correctIds; correctIds.reserve(64);
         std::vector<std::vector<cv::Point2f>> correctCorners; correctCorners.reserve(64);
