@@ -199,9 +199,9 @@ int main(int argc, char** argv) {
     detParams->adaptiveThreshWinSizeMin = 3;
     detParams->adaptiveThreshWinSizeMax = 23;
     detParams->adaptiveThreshWinSizeStep = 10;
-    detParams->minMarkerPerimeterRate = 0.03f; // detect smaller markers
+    detParams->minMarkerPerimeterRate = 0.01f; // detect smaller markers
     detParams->maxMarkerPerimeterRate = 4.0f;
-    detParams->polygonalApproxAccuracyRate = 0.03;
+    detParams->polygonalApproxAccuracyRate = 0.05;
 
     Mat frame;
 
@@ -236,6 +236,7 @@ int main(int argc, char** argv) {
         std::vector<std::vector<cv::Point2f>> wrongCorners; wrongCorners.reserve(64) ;
         std::vector<std::string> wrongLabels; wrongLabels.reserve(64);
 
+        // Rejected candidates (no ID decoded)
         std::vector<std::vector<cv::Point2f>> rejectedCorners; rejectedCorners.reserve(64);
 
         std::vector<int> ids;
@@ -259,18 +260,18 @@ int main(int argc, char** argv) {
         // Draw correct (allowed) markers
         if (!correctIds.empty()) {
             cv::aruco::drawDetectedMarkers(frame, correctCorners, correctIds, cv::Scalar(153, 0, 255));
-            // Draw thicker borders
-            for (const auto& pts : correctCorners) {
-                std::vector<cv::Point> poly;
-                for (const auto& p : pts) poly.push_back(p);
-                const cv::Point* ptsArr = poly.data();
-                int npts = poly.size();
-                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(153, 0, 255), 6, cv::LINE_AA);
-            }
+            // Combined loop: draw thicker border + label
             for (size_t i = 0; i < correctCorners.size(); ++i) {
                 const auto& pts = correctCorners[i];
+                std::vector<cv::Point> poly;
+                poly.reserve(pts.size());
+                for (const auto& p : pts) poly.push_back(p);
+                const cv::Point* ptsArr = poly.data();
+                int npts = static_cast<int>(poly.size());
+                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(153, 0, 255), 6, cv::LINE_AA);
                 cv::Point2f c(0,0);
-                for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
+                for (const auto& p : pts) c += p;
+                c *= 0.25f;
                 cv::putText(frame, correctLabels[i], c + cv::Point2f(-20, -10),
                             cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(153, 0, 255), 1.5, cv::LINE_AA);
             }
@@ -279,35 +280,27 @@ int main(int argc, char** argv) {
         // Draw wrong IDs
         if (!wrongIds.empty()) {
             cv::aruco::drawDetectedMarkers(frame, wrongCorners, wrongIds, cv::Scalar(0, 0, 255));
-            // Draw thicker borders
-            for (const auto& pts : wrongCorners) {
-                std::vector<cv::Point> poly;
-                for (const auto& p : pts) poly.push_back(p);
-                const cv::Point* ptsArr = poly.data();
-                int npts = poly.size();
-                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(0, 0, 255), 6, cv::LINE_AA);
-            }
+            // Combined loop: draw thicker border + label
             for (size_t i = 0; i < wrongCorners.size(); ++i) {
                 const auto& pts = wrongCorners[i];
+                std::vector<cv::Point> poly;
+                poly.reserve(pts.size());
+                for (const auto& p : pts) poly.push_back(p);
+                const cv::Point* ptsArr = poly.data();
+                int npts = static_cast<int>(poly.size());
+                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(0, 0, 255), 6, cv::LINE_AA);
                 cv::Point2f c(0,0);
-                for (const auto& p : pts) c += p; c *= (1.0f/4.0f);
+                for (const auto& p : pts) c += p;
+                c *= 0.25f;
                 cv::putText(frame, wrongLabels[i], c + cv::Point2f(-20, -10),
                             cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
             }
         }
         
         // Draw rejected candidate quadrilaterals (failed final ID / criteria)
-        if (!rejectedCorners.empty()) {
+        if (!rejectedCorners.empty()) 
             cv::aruco::drawDetectedMarkers(frame, rejectedCorners, cv::noArray(), cv::Scalar(60, 60, 255));
-            // Draw thicker borders
-            for (const auto& pts : rejectedCorners) {
-                std::vector<cv::Point> poly;
-                for (const auto& p : pts) poly.push_back(p);
-                const cv::Point* ptsArr = poly.data();
-                int npts = poly.size();
-                cv::polylines(frame, &ptsArr, &npts, 1, true, cv::Scalar(60, 60, 255), 1, cv::LINE_AA);
-            }
-        }
+        
         double dur = nowMs() - start;
         std::string statsText = cv::format("avg %.2f ms  fps %.1f  det %d",
                                            stats.updateAvgMs(dur), stats.tickFps(), (int)correctLabels.size());
